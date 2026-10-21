@@ -29,8 +29,8 @@ public class AiConfig {
 
     @Bean
     public QdrantClient qdrantClient() {
-        QdrantGrpcClient.Builder grpcClientBuilder = QdrantGrpcClient.newBuilder(qdrantHost, qdrantPort, qdrantUseTls)
-                .withCheckCompatibility(false);
+        QdrantGrpcClient.Builder grpcClientBuilder =
+                QdrantGrpcClient.newBuilder(qdrantHost, qdrantPort, qdrantUseTls, false);
 
         if (qdrantApiKey != null && !qdrantApiKey.isBlank()) {
             grpcClientBuilder.withApiKey(qdrantApiKey);
