@@ -1,0 +1,46 @@
+services:
+  redis:
+    image: redis:7.4-alpine
+    container_name: issue-management-redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - issue-management-net
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant_local
+    restart: unless-stopped
+    ports:
+      - "${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5s bash -c '</dev/tcp/127.0.0.1/6334' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - issue-management-net
+
+volumes:
+  redis_data:
+    name: issue-management-redis-data
+  qdrant_data:
+    name: issue-management-qdrant-data
+
+networks:
+  issue-management-net:
+    name: issue-management-net
+    driver: bridge
