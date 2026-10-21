@@ -1,4 +1,25 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: issue-management-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-issue_management}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-issue_management}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - issue-management-net
+
   redis:
     image: redis:7.4-alpine
     container_name: issue-management-redis
@@ -35,6 +56,8 @@ services:
       - issue-management-net
 
 volumes:
+  postgres_data:
+    name: issue-management-postgres-data
   redis_data:
     name: issue-management-redis-data
   qdrant_data:

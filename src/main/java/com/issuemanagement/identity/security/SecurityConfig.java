@@ -39,6 +39,9 @@ public class SecurityConfig {
     private final CustomUserDetailsService userDetailsService;
     private final ObjectMapper objectMapper;
 
+    @org.springframework.beans.factory.annotation.Value("${security.cors.allowed-origins:http://localhost:3000,http://localhost:5173,http://localhost:80}")
+    private List<String> allowedOrigins;
+
     public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter, CustomUserDetailsService userDetailsService) {
         this.jwtAuthenticationFilter = jwtAuthenticationFilter;
         this.userDetailsService = userDetailsService;
@@ -72,6 +75,10 @@ public class SecurityConfig {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                .headers(headers -> headers
+                        .frameOptions(org.springframework.security.config.annotation.web.configurers.HeadersConfigurer.FrameOptionsConfig::deny)
+                        .contentTypeOptions(org.springframework.security.config.Customizer.withDefaults())
+                )
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authenticationProvider(authenticationProvider())
                 .exceptionHandling(exceptions -> exceptions
@@ -80,6 +87,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/api/v1/auth/**",
+                                "/actuator/health",
+                                "/actuator/info",
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html"
@@ -130,10 +139,28 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(List.of("*"));
+        if (allowedOrigins != null && !allowedOrigins.isEmpty()) {
+            List<String> cleanOrigins = allowedOrigins.stream()
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toList();
+            boolean hasWildcard = cleanOrigins.stream().anyMatch(o -> o.contains("*"));
+            if (hasWildcard) {
+                configuration.setAllowedOriginPatterns(cleanOrigins);
+            } else {
+                configuration.setAllowedOrigins(cleanOrigins);
+            }
+        } else {
+            configuration.setAllowedOrigins(List.of("http://localhost:3000", "http://localhost:5173"));
+        }
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Requested-With"));
+        configuration.setAllowedHeaders(List.of(
+                "Authorization", "Content-Type", "X-Requested-With", "Accept", "Origin",
+                "Access-Control-Request-Method", "Access-Control-Request-Headers"
+        ));
         configuration.setExposedHeaders(List.of("Authorization"));
+        configuration.setAllowCredentials(true);
+        configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
