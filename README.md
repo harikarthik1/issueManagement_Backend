@@ -1,373 +1,376 @@
-# AI Issue Management System — Non-AI Foundation
+# AI Issue Management System — Backend API
 
-A production-grade, secure, modular monolith backend foundation for an **AI Issue Management System** built with **Java 21**, **Spring Boot 4.1.x**, **Spring Data JPA**, **PostgreSQL**, **Spring Security**, and **OpenAPI/Swagger UI**.
+A production-grade, secure, modular monolith backend for the **AI Issue Management System** built with **Java 21**, **Spring Boot 4.x**, **Spring AI**, **Google Gemini GenAI**, **Qdrant Vector Database**, **Redis Semantic Cache**, **PostgreSQL**, **Spring Security (JWT)**, and **OpenAPI/Swagger UI**.
 
 ---
 
 ## 1. Architecture Overview (Modular Monolith)
 
-The system is architected as a single deployable Spring Boot modular monolith. Each business capability resides in a dedicated module with its own domain entities, DTOs, repositories, services, and REST controllers:
+The backend is engineered as a Spring Boot modular monolith. Each business capability resides in a strictly bounded module with its own entities, DTOs, repositories, services, and REST controllers:
 
 ```
 com.issuemanagement
-├── common
-│   ├── config          # OpenAPI / Swagger and system configurations
-│   ├── dto             # Standard ApiResponse, PageResponse
-│   └── exception       # Centralized GlobalExceptionHandler and custom business exceptions
-├── identity
-│   ├── controller      # AuthController (Login) and UserController (CRUD, Status)
-│   ├── dto             # Auth and User requests/responses
-│   ├── entity          # User entity and Role enum (ADMIN, PROJECT_MANAGER, EMPLOYEE)
-│   ├── repository      # UserRepository
-│   ├── security        # JWT token provider, filters, and SecurityUtils
-│   └── service         # AuthService, UserService
-├── project
-│   ├── controller      # ProjectController (CRUD, Manager Assignment, Members, Archival)
-│   ├── dto             # Project and Member requests/responses
-│   ├── entity          # Project, ProjectMember, ProjectStatus
-│   ├── repository      # ProjectRepository, ProjectMemberRepository
-│   └── service         # ProjectService, ProjectAuthorizationService
-├── issue
-│   ├── controller      # IssueController (CRUD, Filtering, Workflow, Archival)
-│   ├── dto             # Issue requests/responses
-│   ├── entity          # Issue, IssueType, IssuePriority, IssueStatus
-│   ├── repository      # IssueRepository
-│   └── service         # IssueService
-├── comment
-│   ├── controller      # CommentController (CRUD on issue comments)
-│   ├── dto             # Comment requests/responses
-│   ├── entity          # IssueComment
-│   ├── repository      # IssueCommentRepository
-│   └── service         # CommentService
-├── history
-│   ├── controller      # History endpoints
-│   ├── dto             # IssueHistoryResponse
-│   ├── entity          # IssueHistory, ChangeType
-│   ├── repository      # IssueHistoryRepository
-│   └── service         # IssueHistoryService
-└── audit
-    ├── controller      # AuditController (Admin audit log views)
-    ├── dto             # AuditLogResponse
-    ├── entity          # AuditLog
-    ├── repository      # AuditLogRepository
-    └── service         # AuditService
+├── assistant       # AI Conversational Assistant, Redis memory, semantic cache, function tools
+│   ├── cache       # Redis-based semantic cache with cosine similarity matching
+│   ├── config      # Assistant configuration & memory settings
+│   ├── controller  # AssistantController (conversations, messages, session, cache metrics)
+│   ├── dto         # Chat request/response DTOs, cache metrics
+│   ├── exception   # Assistant-specific exceptions
+│   ├── model       # AssistantConversation & AssistantMessage entities
+│   ├── service     # AssistantConversationService & AssistantToolService
+│   └── tools       # Spring AI function-calling tools (IssueQuery, ProjectQuery, etc.)
+├── audit           # Administrative system-wide audit logging
+├── comment         # Issue discussion threads and authorization checks
+├── common          # Shared utilities, OpenAPI configuration, standard API envelopes, global error handling
+│   ├── config      # OpenApiConfig, AiConfig (Qdrant & ChatClient beans), SecurityConfig
+│   ├── dto         # ApiResponse<T>, PageResponse<T>
+│   └── exception   # GlobalExceptionHandler, ResourceNotFoundException, UnauthorizedException
+├── dashboard       # High-performance zero N+1 metrics aggregation for Employee & PM views
+├── history         # Immutable issue audit trail (status transitions, priority edits, assignee shifts)
+├── identity        # Authentication, JWT tokens, user lifecycle, and role-based access control (RBAC)
+├── issue           # Issue lifecycle, sequence key generation, FSM transitions, AI semantic search & drafting
+│   ├── ai          # Semantic issue deduplication, Qdrant vector sync, and AI drafting service
+│   ├── controller  # IssueController, AiIssueController
+│   ├── dto         # Issue requests, responses, filters, and AI drafts
+│   ├── entity      # Issue, IssueType, IssuePriority, IssueStatus
+│   └── repository  # IssueRepository with optimized JPQL queries
+└── project         # Project lifecycle, PM assignment, employee membership, and access gating
 ```
 
 ---
 
-## 2. Business Roles & Permission Matrix
+## 2. Technology Stack & Key Components
 
-The application defines exactly three primary roles:
-
-| Capability / Action | ADMIN | PROJECT_MANAGER | EMPLOYEE |
-|---------------------|:-----:|:---------------:|:--------:|
-| Authenticate / Login | Yes | Yes | Yes |
-| Create User Account | Yes | No | No |
-| Activate / Deactivate Users | Yes | No | No |
-| View Users List | Yes | No | No |
-| Create Project | Yes | No | No |
-| Assign / Reassign Project Manager | Yes | No | No |
-| Archive Project | Yes | No | No |
-| View Projects | All Projects | Assigned Projects Only | Member Projects Only |
-| Update Project Details (Name, Description) | Yes | Yes (Assigned Only) | No |
-| Add / Remove Regular Project Members | Across All Projects | Assigned Project Only | No |
-| Create Issue | Yes | Yes (Assigned) | Yes (Member Projects) |
-| View Issues | All Issues | Assigned Projects | Member Projects |
-| Assign Issue to Eligible Member | Yes | Yes (Assigned) | No |
-| Update Issue Details (Title, Description, Priority) | Yes | Yes (Assigned) | Yes (Reporter/Assignee) |
-| Transition Issue Status | Yes | Yes (Assigned) | Yes (Reporter/Assignee) |
-| Reopen Closed Issue (`CLOSED` -> `OPEN`) | Yes | Yes (Assigned) | No |
-| Archive / Soft-Delete Issue | Yes | Yes (Assigned) | No |
-| Add Comment | Yes | Yes (Assigned) | Yes (Member Projects) |
-| Edit Comment | Admin / Author | Author Only | Author Only |
-| Delete Comment | Yes | Yes (Assigned) | Author Only |
-| View System Audit Logs | Yes | No | No |
+| Technology | Purpose | Configuration Details |
+|---|---|---|
+| **Java 21 LTS** | Core Runtime | Modern language features (Records, Pattern Matching, Virtual Threads ready) |
+| **Spring Boot 4.1.x** | Core Framework | Web MVC, Security, Actuator, Validation |
+| **Spring AI 2.0.x** | AI Abstractions | ChatClient, Google GenAI Chat & Embeddings, Vector Store |
+| **Google Gemini 2.5 Flash** | Primary LLM | High-speed, context-aware reasoning and function tool execution |
+| **Google Text-Embedding-004** | Vector Embeddings | 3072-dimensional vector embeddings for issues and chat context |
+| **Qdrant Vector DB 1.18** | Vector Storage | gRPC client, HNSW indexing, cosine distance for semantic deduplication |
+| **Redis 7.4 (Upstash ready)** | Memory & Cache | Sliding-window conversation memory & semantic response cache |
+| **PostgreSQL 16+ (Neon ready)**| Relational Store | ACID-compliant storage, HikariCP connection pooling with keep-alive |
+| **Spring Security & JJWT** | Authentication | Stateless JWT Bearer tokens (256-bit HMAC-SHA), role-based auth |
+| **Springdoc OpenAPI 2.8.5** | Documentation | Swagger UI & OpenAPI v3 specs at `/swagger-ui.html` |
+| **Spring Boot Actuator** | Observability | Health probes (`/actuator/health`), metrics, and info endpoints |
 
 ---
 
-## 3. Workflow & Issue State Transitions
+## 3. Business Roles & Permission Matrix
 
-Issue statuses follow a strict, validated finite state machine. Arbitrary status jumps are rejected with clear business errors (`400 Bad Request`):
+The system enforces a strict Role-Based Access Control (RBAC) model across three distinct roles:
+
+| Capability / Action | ADMIN | PROJECT_MANAGER | EMPLOYEE |
+|---|:---:|:---:|:---:|
+| **Authentication & Profile** |
+| Login / Refresh Token | Yes | Yes | Yes |
+| Force Password Change on First Login | Enforced | Enforced | Enforced |
+| Update Personal Profile & Password | Yes | Yes | Yes |
+| **User Management** |
+| Register Initial Admin (Bootstrap) | First user only | No | No |
+| Create New Users (PM / Employee) | Yes | No | No |
+| Activate / Deactivate Accounts | Yes | No | No |
+| View System Users & Role Filters | Yes | No | No |
+| **Project Management** |
+| Create New Project | Yes | No | No |
+| Assign / Reassign Project Manager | Yes | No | No |
+| Archive Project | Yes | No | No |
+| View Projects | All Projects | Managed Projects Only | Member Projects Only |
+| Update Project Name & Description | Yes | Assigned Project Only | No |
+| Add / Remove Regular Project Members | Across All Projects | Assigned Project Only | No |
+| **Issue Tracking & Workflow** |
+| Create Issue in Project | Yes | Assigned Project | Member Projects |
+| View Issues | All Issues | Assigned Projects | Member Projects |
+| Assign / Reassign Issue to Member | Yes | Assigned Project Only | No |
+| Update Issue Details (Title, Description, Priority)| Yes | Assigned Project | Reporter / Assignee |
+| Transition Issue Status (FSM Rules) | Yes | Assigned Project | Reporter / Assignee |
+| Reopen Closed Issue (`CLOSED` -> `OPEN`) | Yes | Assigned Project | Member with Reason |
+| Archive / Soft-Delete Issue | Yes | Assigned Project Only | No |
+| Add Comment to Issue | Yes | Assigned Project | Member Projects |
+| Edit / Delete Comment | Admin / Author | Assigned Project / Author | Author Only |
+| View Complete Issue History Trail | Yes | Assigned Project | Member Projects |
+| **AI Features** |
+| Chat with AI Assistant | Yes | Yes | Yes (Project-scoped) |
+| Semantic Similar-Issue Search | Yes | Yes | Yes (Member Projects) |
+| Natural Language Issue Drafting | Yes | Yes | Yes |
+| Sync / Re-index Qdrant Vectors | Yes | Assigned Project Only | No |
+| View Semantic Cache Performance Metrics | Yes | No | No |
+| **Governance & Audit** |
+| View System-Wide Audit Logs | Yes | No | No |
+
+---
+
+## 4. Workflow & Issue Finite State Machine (FSM)
+
+Issue status transitions are governed by an automated, validated state machine. Illegal status hops are rejected with `400 Bad Request`.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> OPEN: Created
-    OPEN --> IN_PROGRESS: Start Work
-    OPEN --> CLOSED: Cancel / Close Directly
-    IN_PROGRESS --> RESOLVED: Work Finished
-    IN_PROGRESS --> OPEN: Reverted
+    [*] --> OPEN: Issue Created
+    OPEN --> IN_PROGRESS: Developer Starts Work
+    OPEN --> CLOSED: Cancel / Close Directly (PM / Admin)
+    IN_PROGRESS --> RESOLVED: Work Completed & Tested
+    IN_PROGRESS --> OPEN: Reverted to Backlog
     RESOLVED --> CLOSED: Verified & Closed
-    RESOLVED --> IN_PROGRESS: Reopened after QA
-    CLOSED --> OPEN: Reopened (Admin / PM only)
+    RESOLVED --> IN_PROGRESS: QA Rejection / Issues Found
+    CLOSED --> OPEN: Reopened (PM, Admin, or Member with rationale)
 ```
 
-- **OPEN**: Can transition to `IN_PROGRESS` or `CLOSED`.
-- **IN_PROGRESS**: Can transition to `RESOLVED` or revert to `OPEN`.
-- **RESOLVED**: Can transition to `CLOSED` or revert to `IN_PROGRESS`.
-- **CLOSED**: Terminal state. Can only be reopened back to `OPEN` by an `ADMIN` or the assigned `PROJECT_MANAGER`.
+### Transition Specifications:
+- **`OPEN`**: Can transition to `IN_PROGRESS` or `CLOSED`.
+- **`IN_PROGRESS`**: Can transition to `RESOLVED` or revert to `OPEN`.
+- **`RESOLVED`**: Can transition to `CLOSED` or revert to `IN_PROGRESS`.
+- **`CLOSED`**: Terminal state. Can only be reopened back to `OPEN` with an audit comment explaining why.
 
 ---
 
-## 4. Database Schema (PostgreSQL & Spring Data JPA)
+## 5. AI Architecture & Vector Search
 
-Database schema is managed via Hibernate DDL auto-generation (`spring.jpa.hibernate.ddl-auto=update`):
+The backend integrates Spring AI with Google Gemini and Qdrant Vector DB:
 
-- `users`: User identity, hashed passwords, roles (`ADMIN`, `PROJECT_MANAGER`, `EMPLOYEE`), active status, and `password_change_required` flag.
-- `projects`: Project key (`UNIQUE`), name, manager assignment (`manager_id`), status (`ACTIVE`, `ARCHIVED`).
-- `project_members`: Join table linking projects and employees with a `UNIQUE(project_id, user_id)` constraint.
-- `issues`: Issue key (`UNIQUE`, e.g. `CORE-1`), title, description, type, priority, status, reporter, assignee (`nullable`), and soft-deletion flag `archived`.
-- `issue_comments`: Comments linked to issues and authors with timestamps.
-- `issue_history`: Immutable change history recording actor, change type (`CREATED`, `STATUS_CHANGED`, `PRIORITY_CHANGED`, `ASSIGNEE_CHANGED`, `UPDATED`, `ARCHIVED`), old value, and new value.
-- `audit_logs`: Administrative event logging.
+### 5.1 Semantic Deduplication & Similar Issue Search
+- When an issue is created or typed, the title and description are converted into a **3072-dimensional vector embedding** using Google's `text-embedding-004`.
+- The embedding is queried against Qdrant via gRPC with a project-level filter (`projectId == <id>`).
+- If an existing issue exceeds the similarity threshold, it is returned with a similarity score, allowing the user to view or reopen the existing issue instead of creating duplicates.
 
-No static/hardcoded administrator accounts are seeded. The application uses the Admin Registration API (`POST /api/v1/auth/register-admin`) to securely bootstrap the single initial administrator account.
+### 5.2 AI Issue Drafting
+- Converts raw natural language bug reports or user requests into a structured draft (title, type, priority, formatted markdown description, and suggested tags) using `gemini-2.5-flash`.
 
----
-
-## 5. API Endpoints & Swagger / OpenAPI Documentation
-
-Interactive Swagger UI and OpenAPI documentation are available out of the box with JWT Bearer token authentication:
-
-- **Swagger UI:** `http://localhost:8080/swagger-ui.html`
-- **OpenAPI JSON Docs:** `http://localhost:8080/v3/api-docs`
-
-### Key API Routes:
-
-#### Authentication & Identity
-- `POST /api/v1/auth/register-admin` (alias `/api/v1/auth/register`) — Register the initial administrator account (only one admin registration permitted without secret key; returns user info only)
-- `POST /api/v1/auth/login` — Authenticate and receive JWT Bearer token (returns `passwordChangeRequired` flag)
-- `POST /api/v1/auth/change-password` — Set a new unique password (required on first login for accounts with `passwordChangeRequired = true` before normal APIs can be used)
-- `POST /api/v1/users` — Create user (Admin only)
-- `GET /api/v1/users` — Paginated user list with role filtering (Admin only)
-- `GET /api/v1/users/{userId}` — Get user details (Admin or self)
-- `PATCH /api/v1/users/{userId}` — Update user details (Admin or self)
-- `PATCH /api/v1/users/{userId}/status` — Activate/deactivate user account (Admin only)
-- `GET /api/v1/users/eligible/employees` — List active employees eligible for project assignment
-- `GET /api/v1/users/eligible/managers` — List active project managers (Admin only)
-
-#### Project Management
-- `POST /api/v1/projects` — Create project with assigned active PM (Admin only)
-- `GET /api/v1/projects` — List projects scoped to user permissions (Admin: all, PM: managed, Employee: member)
-- `GET /api/v1/projects/{projectId}` — Get project details (Authorized users)
-- `PATCH /api/v1/projects/{projectId}` — Update project name/description (Admin or assigned PM)
-- `PUT /api/v1/projects/{projectId}/manager` — Reassign project manager (Admin only)
-- `GET /api/v1/projects/{projectId}/members` — List members in project
-- `POST /api/v1/projects/{projectId}/members` — Add employee to project (Admin or assigned PM)
-- `DELETE /api/v1/projects/{projectId}/members/{userId}` — Remove employee from project (Admin or assigned PM)
-- `POST /api/v1/projects/{projectId}/archive` — Archive project (Admin only)
-
-#### Issue Management & History
-- `POST /api/v1/projects/{projectId}/issues` — Create issue in project
-- `GET /api/v1/projects/{projectId}/issues` — List issues in project with filtering (`status`, `priority`, `type`, `assigneeId`) and pagination (used for manager & drill-down views)
-- `GET /api/v1/issues/{issueId}` — Get issue details
-- `PATCH /api/v1/issues/{issueId}` — Update issue details
-- `PUT /api/v1/issues/{issueId}/assignee` — Assign/reassign issue to eligible project member
-- `PATCH /api/v1/issues/{issueId}/status` — Transition issue status according to workflow rules
-- `POST /api/v1/issues/{issueId}/reopen` — Reopen issue (including `CLOSED`) with reason comment (Active project members, assigned PM, or Admin)
-- `POST /api/v1/issues/{issueId}/archive` — Archive issue (Admin or assigned PM)
-- `DELETE /api/v1/issues/{issueId}` — Soft delete / archive issue (Admin or assigned PM)
-- `GET /api/v1/issues/{issueId}/history` — View complete change history and audit trail for an issue
-
-#### Dashboards
-- `GET /api/v1/dashboard/employee` — Personal workload dashboard for the authenticated employee
-- `GET /api/v1/projects/{projectId}/dashboard` — Project manager operational dashboard for assigned PM or Admin
-
-#### Comments
-- `POST /api/v1/issues/{issueId}/comments` — Add comment to accessible issue
-- `GET /api/v1/issues/{issueId}/comments` — List comments for an issue
-- `PATCH /api/v1/comments/{commentId}` — Edit comment (Author only)
-- `DELETE /api/v1/comments/{commentId}` — Delete comment (Author, assigned PM, or Admin)
-
-#### Audit Logs
-- `GET /api/v1/audit-logs` — View system audit logs (Admin only)
+### 5.3 Conversational AI Assistant
+- Multi-turn conversation management with a configurable sliding-window memory (default: last 30 messages) stored in Redis with an automated TTL.
+- **Tool Calling (Function Calling):** The LLM autonomously executes backend tools to fetch issue details, search across accessible projects, check member workloads, and inspect history without exposing sensitive data outside project boundaries.
+- **Redis Semantic Cache:** Caches responses using vector embeddings. If a user asks a semantically equivalent query (`similarity >= 0.88`), the cached response is returned in milliseconds, saving LLM tokens and API latency.
 
 ---
 
-## 6. Dashboards & Workflow Specifications
+## 6. Dashboards & Metric Aggregations
+
+Designed with **zero N+1 queries** using custom JPQL projections and database aggregations:
 
 ### 6.1 Employee Dashboard (`GET /api/v1/dashboard/employee`)
-- **Authentication:** Determined strictly from the authenticated security context (JWT principal). Clients cannot supply arbitrary user IDs.
-- **Aggregation Metrics (Zero N+1):**
-  - `totalAssignedIssues`: Count of all issues across accessible projects currently assigned to the logged-in employee.
-  - Per-status counts: `openCount`, `inProgressCount`, `resolvedCount`, `closedCount`.
-  - Active urgency counts: `highPriorityActiveCount`, `criticalPriorityActiveCount` (for active `OPEN` and `IN_PROGRESS` assigned issues).
-  - `activeAssignedIssues`: Prioritized list containing only `OPEN` and `IN_PROGRESS` assigned issues.
-- **Priority Ordering:** Deterministic backend ordering:
-  `CRITICAL` -> `HIGH` -> `MEDIUM` -> `LOW`, secondary sort by `createdAt DESC`.
-- **Isolation:** Unassigned issues and other employees' issues are excluded. If the user has no assigned issues, a consistent empty state is returned.
-
-#### Example Response:
-```json
-{
-  "success": true,
-  "message": "Employee dashboard retrieved successfully",
-  "data": {
-    "employeeId": 12,
-    "employeeName": "Jane Doe",
-    "employeeEmail": "jane.doe@example.com",
-    "totalAssignedIssues": 5,
-    "openCount": 2,
-    "inProgressCount": 1,
-    "resolvedCount": 1,
-    "closedCount": 1,
-    "highPriorityActiveCount": 1,
-    "criticalPriorityActiveCount": 1,
-    "activeAssignedIssues": [
-      {
-        "id": 101,
-        "issueKey": "PROJ-101",
-        "title": "Payment webhook retry failure",
-        "type": "BUG",
-        "priority": "CRITICAL",
-        "status": "OPEN",
-        "projectId": 3,
-        "projectKey": "PROJ",
-        "projectName": "Core Billing",
-        "assigneeId": 12,
-        "assigneeName": "Jane Doe",
-        "createdAt": "2026-10-16T12:00:00Z",
-        "updatedAt": "2026-10-16T12:00:00Z"
-      }
-    ]
-  }
-}
-```
+- **Strict Isolation:** Sourced directly from the authenticated JWT principal.
+- **Metrics:** `totalAssignedIssues`, per-status counts (`open`, `inProgress`, `resolved`, `closed`), and urgent active counts (`highPriorityActive`, `criticalPriorityActive`).
+- **Priority Worklist:** Returns prioritized active issues sorted deterministically (`CRITICAL` -> `HIGH` -> `MEDIUM` -> `LOW`, secondary sort by `createdAt DESC`).
 
 ### 6.2 Project Manager Dashboard (`GET /api/v1/projects/{projectId}/dashboard`)
-- **Authorization:** Accessible only by `ADMIN` or the specific `PROJECT_MANAGER` assigned to the project. Other project managers and employees are rejected (`403 Forbidden`).
-- **Project Summary Metrics (Zero N+1 Aggregation):**
-  - `totalIssues`: Total non-archived issues in the project. Reconciles exactly with `openCount + inProgressCount + resolvedCount + closedCount`.
-  - `pendingWorkCount`: Total actionable work (`openCount + inProgressCount`).
-  - `highPriorityActiveCount` & `criticalPriorityActiveCount`: Active project-wide urgent issues.
-  - `unassignedActiveCount`: Count of `OPEN` and `IN_PROGRESS` issues without an assignee.
-  - `unassignedActiveIssues`: Prioritized list of unassigned active issues for rapid triaging.
-- **Team Workload Breakdown:**
-  - For every current active member in the project: employee ID, full name, email, per-status counts (`open`, `inProgress`, `resolved`, `closed`), total assigned count, and active high/critical counts.
-  - Current members with zero assigned issues are included.
-  - Inactive employees are excluded from the current team member list while historical assignments remain preserved.
-- **Drill-Down Capability:**
-  Frontend clients can drill down into any count card or employee workload using the existing query API:
-  `GET /api/v1/projects/{projectId}/issues?status={STATUS}&assigneeId={EMPLOYEE_ID}`.
+- **Access Check:** Only accessible by `ADMIN` or the assigned `PROJECT_MANAGER`.
+- **Reconciled Totals:** `totalIssues == open + inProgress + resolved + closed`.
+- **Triage Queue:** Prioritized list of unassigned active issues (`OPEN` and `IN_PROGRESS` where `assignee IS NULL`).
+- **Team Workload Breakdown:** Per-member breakdown of active assignments, high-priority counts, and resolution rates.
 
 ---
 
-### 6.3 Lifecycle & Assignment Cleanup
+## 7. Lifecycle & Assignment Cleanup Cascades
 
-#### Member Removal from Project (`DELETE /api/v1/projects/{projectId}/members/{userId}`)
-- When a user is removed from a project:
-  1. All `OPEN` and `IN_PROGRESS` issues assigned to that user **within that project** are unassigned (`assignee = null`).
-  2. `RESOLVED` and `CLOSED` issues remain assigned to preserve historical attribution.
-  3. An `ASSIGNEE_CHANGED` history entry is recorded for each unassigned issue.
-  4. An administrative `MEMBER_REMOVED` audit log entry is recorded.
-  5. The entire operation runs within a single atomic `@Transactional` boundary.
-
-#### Account Deactivation (`PATCH /api/v1/users/{userId}/status`)
-- When an employee account is deactivated (`active = false`):
-  1. `JwtAuthenticationFilter` rejects any subsequent requests using existing or new JWTs (`401 Unauthorized`).
-  2. Login is rejected (`401 Unauthorized`).
-  3. The user is excluded from active employee eligibility endpoints (`/api/v1/users/eligible/employees`).
-  4. All `OPEN` and `IN_PROGRESS` issues assigned to that user **across all projects** are unassigned (`assignee = null`).
-  5. `RESOLVED` and `CLOSED` issues, historical records, comments, and project memberships are preserved.
-  6. Atomic `@Transactional` execution guarantees full rollback on any failure.
-
-#### Confirmed-Match Issue Reopening (`POST /api/v1/issues/{issueId}/reopen`)
-- Allows any active project member, the assigned PM, or an Admin to reopen an issue (including from `CLOSED` to `OPEN`).
-- Records an automatic comment with the reopen reason and writes a `STATUS_CHANGED` entry to `issue_history`.
+- **Project Member Removal (`DELETE /api/v1/projects/{projectId}/members/{userId}`):**
+  - All `OPEN` and `IN_PROGRESS` issues assigned to that user in the project are unassigned (`assignee = null`).
+  - `RESOLVED` and `CLOSED` issues remain attributed to preserve historical accountability.
+  - Automatically appends an `ASSIGNEE_CHANGED` history entry and records a `MEMBER_REMOVED` audit log.
+- **Account Deactivation (`PATCH /api/v1/users/{userId}/status`):**
+  - Immediate token invalidation: existing JWTs fail validation.
+  - All active issues across all projects assigned to the user are unassigned in a single atomic transaction.
 
 ---
 
-## 7. Local Development & Setup
+## 8. REST API Reference
 
-### Prerequisites
-- **Java 21 JDK**
-- **Maven** (or use the included Maven wrapper `./mvnw.cmd` / `./mvnw`)
-- **PostgreSQL 18.x** (running on localhost:5432 or configured via environment variables)
+Swagger UI is accessible at `http://localhost:8080/swagger-ui.html`.
 
-### Configuration
-Copy `.env.example` or configure `application.properties`:
+### 8.1 Authentication & User Management
+| Method | Endpoint | Description | Access |
+|---|---|---|---|
+| `POST` | `/api/v1/auth/register-admin` | Bootstrap initial system admin | Public (Once) |
+| `POST` | `/api/v1/auth/login` | Authenticate & obtain JWT | Public |
+| `POST` | `/api/v1/auth/change-password` | Force password reset on first login | Authenticated |
+| `POST` | `/api/v1/users` | Create new PM or Employee | Admin |
+| `GET` | `/api/v1/users` | List users with role filter & pagination | Admin |
+| `GET` | `/api/v1/users/{id}` | Get user profile details | Admin / Self |
+| `PATCH`| `/api/v1/users/{id}` | Update profile details | Admin / Self |
+| `PATCH`| `/api/v1/users/{id}/status` | Activate or deactivate account | Admin |
+| `GET` | `/api/v1/users/eligible/employees` | List active employees for project assignment | Admin / PM |
+| `GET` | `/api/v1/users/eligible/managers` | List eligible project managers | Admin |
+
+### 8.2 Project Management
+| Method | Endpoint | Description | Access |
+|---|---|---|---|
+| `POST` | `/api/v1/projects` | Create project with assigned PM | Admin |
+| `GET` | `/api/v1/projects` | List projects scoped to user role | All (Scoped) |
+| `GET` | `/api/v1/projects/{id}` | Get project details | Authorized |
+| `PATCH`| `/api/v1/projects/{id}` | Update project name or description | Admin / Assigned PM |
+| `PUT` | `/api/v1/projects/{id}/manager` | Reassign project manager | Admin |
+| `GET` | `/api/v1/projects/{id}/members` | List members of project | Project Members |
+| `POST` | `/api/v1/projects/{id}/members` | Add employee to project | Admin / Assigned PM |
+| `DELETE`| `/api/v1/projects/{id}/members/{uid}` | Remove employee (cleans active assignments) | Admin / Assigned PM |
+| `POST` | `/api/v1/projects/{id}/archive` | Archive project | Admin |
+
+### 8.3 Issue Management & Workflow
+| Method | Endpoint | Description | Access |
+|---|---|---|---|
+| `POST` | `/api/v1/projects/{id}/issues` | Create new issue with sequence key | Member / PM / Admin |
+| `GET` | `/api/v1/projects/{id}/issues` | Filterable paginated issue list | Member / PM / Admin |
+| `GET` | `/api/v1/issues/{id}` | Get issue details | Project Members |
+| `PATCH`| `/api/v1/issues/{id}` | Update title, description, priority | Reporter / Assignee / PM / Admin |
+| `PUT` | `/api/v1/issues/{id}/assignee` | Assign/reassign issue to member | Admin / Assigned PM |
+| `PATCH`| `/api/v1/issues/{id}/status` | Transition issue status (FSM) | Reporter / Assignee / PM / Admin |
+| `POST` | `/api/v1/issues/{id}/reopen` | Reopen closed issue with reason comment | Active Project Members |
+| `DELETE`| `/api/v1/issues/{id}` | Soft delete / archive issue | Admin / Assigned PM |
+| `GET` | `/api/v1/issues/{id}/history` | Audit trail of all field changes | Project Members |
+
+### 8.4 AI & Semantic Capabilities
+| Method | Endpoint | Description | Access |
+|---|---|---|---|
+| `POST` | `/api/v1/projects/{id}/issues/ai/search-similar` | Semantic deduplication search via Qdrant | Project Members |
+| `POST` | `/api/v1/projects/{id}/issues/ai/draft` | Generate structured issue draft from prompt | Project Members |
+| `POST` | `/api/v1/projects/{id}/issues/ai/sync-vectors` | Re-index project issues into Qdrant | Admin / Assigned PM |
+| `POST` | `/api/v1/assistant/conversations` | Create new AI chat conversation | Authenticated |
+| `GET` | `/api/v1/assistant/conversations` | List user's conversations | Authenticated |
+| `GET` | `/api/v1/assistant/conversations/{id}/messages` | Get message history in thread | Authenticated |
+| `POST` | `/api/v1/assistant/conversations/{id}/messages` | Send message & receive AI reply | Authenticated |
+| `DELETE`| `/api/v1/assistant/conversations/{id}` | Delete conversation thread | Authenticated |
+| `DELETE`| `/api/v1/assistant/session` | Clear current chat session memory | Authenticated |
+| `GET` | `/api/v1/assistant/cache/metrics` | View Redis semantic cache hit/miss stats | Admin |
+
+### 8.5 Comments, Dashboards & Audit
+| Method | Endpoint | Description | Access |
+|---|---|---|---|
+| `POST` | `/api/v1/issues/{id}/comments` | Add comment to issue | Project Members |
+| `GET` | `/api/v1/issues/{id}/comments` | List issue comments | Project Members |
+| `PATCH`| `/api/v1/comments/{id}` | Edit comment | Author Only |
+| `DELETE`| `/api/v1/comments/{id}` | Delete comment | Author / PM / Admin |
+| `GET` | `/api/v1/dashboard/employee` | Personal workload dashboard | Authenticated |
+| `GET` | `/api/v1/projects/{id}/dashboard`| PM operational project dashboard | Admin / Assigned PM |
+| `GET` | `/api/v1/audit-logs` | Query system audit logs | Admin |
+
+---
+
+## 9. Environment Variables & Configuration
+
+Configure using `.env` or system environment variables:
+
 ```bash
+# Server Configuration
+SERVER_PORT=8080
+SPRING_PROFILES_ACTIVE=prod
+
+# PostgreSQL Database (Local or Neon Serverless)
 SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/issue_management
 SPRING_DATASOURCE_USERNAME=postgres
 SPRING_DATASOURCE_PASSWORD=your_password
+SPRING_JPA_HIBERNATE_DDL_AUTO=update
+
+# Database Connection Pool (HikariCP)
+DB_POOL_MAX=10
+DB_POOL_MIN_IDLE=2
+DB_POOL_IDLE_TIMEOUT=300000
+DB_POOL_MAX_LIFETIME=600000
+DB_POOL_CONNECTION_TIMEOUT=30000
+DB_POOL_KEEPALIVE_TIME=120000
+
+# Redis (Local or Upstash)
+REDIS_URL=redis://localhost:6379
+# Alternatively:
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+REDIS_SSL_ENABLED=false
+
+# Qdrant Vector Database (Local or Qdrant Cloud)
+QDRANT_HOST=localhost
+QDRANT_PORT=6334
+QDRANT_API_KEY=
+QDRANT_USE_TLS=false
+QDRANT_COLLECTION=issues
+
+# Security & JWT (256-bit key)
 JWT_SECRET=404E635266556A586E3272357538782F413F4428472B4B6250645367566B5970
 JWT_EXPIRATION_MS=86400000
-SERVER_PORT=8080
-```
 
-### Build & Run
-1. **Compile and run all automated tests:**
-   ```bash
-   .\mvnw.cmd clean test
-   ```
-2. **Build executable JAR:**
-   ```bash
-   .\mvnw.cmd package -DskipTests
-   ```
-3. **Start the application:**
-   ```bash
-   .\mvnw.cmd spring-boot:run
-   ```
-4. **Open Swagger UI in your browser:**
-   ```
-   http://localhost:8080/swagger-ui.html
-   ```
+# CORS Allowed Origins (Comma-separated)
+CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000,http://localhost:80
+
+# Google Gemini AI Integration
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_API_EMBEDDING_KEY=your_gemini_api_key_here
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_EMBEDDING_MODEL=text-embedding-004
+
+# Assistant Memory & Semantic Cache
+ASSISTANT_MAX_MESSAGES=30
+ASSISTANT_CONVERSATION_TTL_SECONDS=86400
+ASSISTANT_MAX_USER_MESSAGE_LENGTH=4000
+ASSISTANT_SEMANTIC_CACHE_ENABLED=true
+ASSISTANT_SEMANTIC_CACHE_TTL_SECONDS=3600
+ASSISTANT_SEMANTIC_CACHE_THRESHOLD=0.88
+```
 
 ---
 
-## 8. Automated Test Suite & Actual Verification Results
+## 10. Local Development & Setup
 
-Automated test execution against PostgreSQL 18.1:
+### Prerequisites
+- **Java 21 JDK** (Eclipse Temurin, Corretto, or Oracle)
+- **Docker & Docker Compose** (for running PostgreSQL, Redis, and Qdrant locally)
+- **Maven 3.9+** (or use the included `./mvnw.cmd` / `./mvnw`)
+
+### Quick Start with Docker Dependencies
+From the repository root, start PostgreSQL, Redis, and Qdrant:
+```bash
+docker compose up -d postgres redis qdrant
+```
+
+### Build & Run the Backend
+```bash
+# 1. Navigate to the backend directory
+cd issueManagement
+
+# 2. Run automated test suite
+.\mvnw.cmd test
+
+# 3. Build executable JAR
+.\mvnw.cmd package -DskipTests
+
+# 4. Start the Spring Boot application
+.\mvnw.cmd spring-boot:run
+```
+
+Once started, explore the interactive API documentation at:
+**`http://localhost:8080/swagger-ui.html`**
+
+---
+
+## 11. Automated Testing
+
+The backend includes a comprehensive automated test suite covering unit, integration, and security tests:
+
 ```bash
 .\mvnw.cmd clean test
 ```
-**Results:**
-```text
-[INFO] Results:
-[INFO] 
-[INFO] Tests run: 47, Failures: 0, Errors: 0, Skipped: 0
-[INFO] 
-[INFO] ------------------------------------------------------------------------
-[INFO] BUILD SUCCESS
-[INFO] ------------------------------------------------------------------------
-```
 
-### Test Coverage Breakdown:
-1. **`IssueManagementIntegrationTest` (Full E2E against PostgreSQL):**
-   - Admin initial login and forced password change.
-   - Project creation and assignment to active Project Manager.
-   - Adding and removing project members with assignment cleanup.
-   - Deactivating employee account and immediate JWT rejection on subsequent requests.
-   - Cross-project isolation and RBAC authorization gating.
-   - Employee dashboard counts, active priority ordering, and isolation from other users.
-   - Project manager dashboard total reconciliation (`OPEN + IN_PROGRESS + RESOLVED + CLOSED`), pending work count, unassigned active issue triage list, and member workload breakdown.
-   - Drill-down queries verifying project isolation.
-   - Active project member reopening of `CLOSED` issue with history tracking.
-2. **`DashboardServiceTest` (Unit Tests):**
-   - Employee dashboard aggregation correctness, priority sorting, and empty state handling.
-   - Project manager dashboard metrics reconciliation and unauthorized PM rejection.
-   - Filtering of inactive employees from current project workload.
-3. **`ProjectServiceTest` (13 tests):**
-   - Project creation, unique keys, manager assignment, employee eligibility, duplicate membership rejection, archival, and member removal issue unassignment.
-4. **`UserServiceTest` (11 tests):**
-   - Employee deactivation, cross-project active issue unassignment, preservation of closed/resolved issues, self-deactivation prevention for administrators.
-5. **`IssueServiceTest` (8 tests):**
-   - Key sequencing (`{PROJECT_KEY}-{N}`), assignee membership verification, status transition tracking, and member reopening.
-6. **`IssueStatusTransitionTest` (5 tests):**
-   - FSM validation for legal transitions and rejection of illegal state jumps.
-7. **`JwtTokenProviderTest` (3 tests):**
-   - Production profile startup validation for weak (<256 bit) or default secrets.
-8. **`CommentServiceTest` (2 tests):**
-   - Authorization gating ensuring only current project members or PM can comment or edit/delete.
+### Key Test Suites:
+- **`IssueManagementIntegrationTest`**: End-to-end user workflows, admin bootstrap, first-login password enforcement, and token invalidation on deactivation.
+- **`IssueStatusTransitionTest`**: Finite state machine validation for allowed and forbidden transitions.
+- **`DashboardServiceTest`**: Verification of zero N+1 metrics aggregations, urgent issue triage, and workload calculations.
+- **`ProjectServiceTest` & `UserServiceTest`**: RBAC checks, cross-project isolation, and cascade cleanup logic.
+- **`JwtTokenProviderTest`**: Secret entropy validation and token parsing.
 
 ---
 
-## 9. Future AI Integration Boundary (Non-AI Foundation)
+## 12. Production Deployment
 
-The system is cleanly structured to support future AI-driven issue deduplication and assistance without coupling core domain services:
-- **Duplicate Match Reopening:** `POST /api/v1/issues/{issueId}/reopen` is now available for active project members to confirm and reopen duplicate issues, adding a rationale comment and history record.
-- **Service Boundaries:**
-  - `IssueService.createIssue()`: Enforces key generation, reporter attribution, and initial state.
-  - `CommentService.createComment()`: Enforces project access and author attribution.
-  - `ProjectAuthorizationService.checkProjectAccess()`: Ensures all future AI similarity searches and queries strictly respect project boundaries.
-- **Zero AI Code:** No AI SDKs, embeddings, vector databases, or LLM API calls are present in this foundation.
+### Docker Deployment
+The backend includes a multi-stage `Dockerfile`:
+```bash
+docker build -t issue-management-api ./issueManagement
+docker run -p 8080:8080 --env-file .env issue-management-api
+```
 
+### Cloud Deployment (Render)
+A turnkey blueprint is configured in `render.yaml`:
+1. Connect the repository to **Render**.
+2. Select **Web Service** using the Docker runtime.
+3. Configure environment variables pointing to:
+   - **PostgreSQL**: Managed Neon instance (`sslmode=require`).
+   - **Redis**: Upstash Redis with TLS.
+   - **Qdrant**: Qdrant Cloud cluster with API key and TLS.
+   - **Gemini**: Google AI Studio API key.
